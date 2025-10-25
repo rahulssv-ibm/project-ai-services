@@ -1,29 +1,42 @@
 package logger
 
 import (
-	"log"
-	"time"
+	"os"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
-var Logger *zap.Logger
+var (
+	Logger      *zap.Logger
+	atomicLevel zap.AtomicLevel
+)
 
 func init() {
-	cfg := zap.NewProductionConfig()
-	cfg.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout(time.RFC3339)
-	cfg.EncoderConfig.TimeKey = ""
-	cfg.EncoderConfig.CallerKey = ""
-	cfg.DisableStacktrace = true
-	cfg.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	logger, err := cfg.Build()
-	if err != nil {
-		log.Println("Error while initializing logger.", err)
-	}
-	Logger = logger
+	atomicLevel = zap.NewAtomicLevelAt(zap.InfoLevel)
+	consoleEncoder := zapcore.NewConsoleEncoder(zapcore.EncoderConfig{
+		TimeKey:        "",
+		LevelKey:       "",
+		NameKey:        "",
+		CallerKey:      "",
+		MessageKey:     "msg",
+		EncodeLevel:    zapcore.CapitalColorLevelEncoder,
+		EncodeTime:     zapcore.ISO8601TimeEncoder,
+		EncodeDuration: zapcore.StringDurationEncoder,
+	})
+
+	core := zapcore.NewCore(consoleEncoder, zapcore.AddSync(os.Stdout), atomicLevel)
+	Logger = zap.New(core)
 }
 
 func GetLogger() *zap.Logger {
 	return Logger
+}
+
+func SetLogLevel(level zapcore.Level) {
+	atomicLevel.SetLevel(level)
+}
+
+func GetLogLevel() zapcore.Level {
+	return atomicLevel.Level()
 }

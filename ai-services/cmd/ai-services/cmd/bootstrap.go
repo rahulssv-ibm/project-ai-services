@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
@@ -15,6 +16,17 @@ import (
 
 var (
 	logger = log.GetLogger()
+)
+
+// Validation check types
+const (
+	CheckRoot          = "root"
+	CheckRHEL          = "rhel"
+	CheckRHN           = "rhn"
+	CheckServiceReport = "service-report"
+	CheckPodman        = "podman"
+	CheckPower11       = "power11"
+	CheckRHAIIS        = "rhaiis"
 )
 
 // bootstrapCmd represents the bootstrap command
@@ -49,7 +61,11 @@ Available subcommands:
 
 // validateCmd represents the validate subcommand of bootstrap
 func validateCmd() *cobra.Command {
-	return &cobra.Command{
+
+	var skipChecks []string
+	var verbose bool
+
+	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "validates the environment",
 		Long: `Validate that all prerequisites and configurations are correct for bootstrapping.
@@ -62,7 +78,6 @@ System Checks:
   • RHEL version validation (9.6 or higher)
   • Power 11 architecture validation
   • RHN registration status
-  • LTC yum repository availability
   • service-report package availability
 
 Container Runtime:
@@ -72,53 +87,103 @@ Container Runtime:
 License:
   • RHAIIS license
 
-All checks must pass for successful bootstrap configuration.`,
+All checks must pass for successful bootstrap configuration.
+
+
+//TODO: generate this via some program
+Available checks to skip:
+  root    		  - Root privileges check
+  rhel            - RHEL OS and version check
+  rhn             - Red Hat Network registration check
+  service-report  - service-report repository check
+  podman          - Podman installation and configuration check
+  power11  		  - Power 11 architecture check
+  rhaiis   		  - RHAIIS license check (already optional)`,
 		Example: `  # Run all validation checks
   aiservices bootstrap validate
 
-  # Validate with verbose output
-  aiservices bootstrap validate -v`,
+  # Skip RHN registration check
+  aiservices bootstrap validate --skip-validation rhn
+
+  # Skip multiple checks
+  aiservices bootstrap validate --skip-validation rhn,ltc
+  
+  # Run with verbose output
+  aiservices bootstrap validate --verbose`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+
+			// TODO: use klog structured logging
+			if verbose {
+				log.SetLogLevel(zap.DebugLevel)
+				logger.Debug("Verbose mode enabled")
+			}
+
 			logger.Info("Running bootstrap validation...")
 
+			skip := parseSkipChecks(skipChecks)
+			if len(skip) > 0 {
+				logger.Warn("⚠️  WARNING: Skipping validation checks", zap.Strings("skipped", skipChecks))
+			}
+
 			var validationErrors []error
+			// TODO: add hints for each validation error
 
 			// 1. Root check
-			if err := rootCheck(); err != nil {
-				return err
+			if !skip[CheckRoot] {
+				if err := rootCheck(); err != nil {
+					return err
+				}
 			}
 
 			// 2. OS and version check
-			if err := validateOS(); err != nil {
-				validationErrors = append(validationErrors, err)
+			if !skip[CheckRHEL] {
+				if err := validateOS(); err != nil {
+					validationErrors = append(validationErrors, err)
+				}
 			}
 
 			// 3. Validate RHN registration
-			if err := validateRHNRegistration(); err != nil {
-				validationErrors = append(validationErrors, err)
+			if !skip[CheckRHN] {
+				if err := validateRHNRegistration(); err != nil {
+					validationErrors = append(validationErrors, err)
+				}
 			}
 
 			// 4. LTC yum repository for installing service-report package
-			if err := validateLTCRPMRepo(); err != nil {
-				validationErrors = append(validationErrors, err)
+			if !skip[CheckServiceReport] {
+				if err := validateServiceReport(); err != nil {
+					validationErrors = append(validationErrors, err)
+				}
 			}
 
 			// 5. Validate Podman installation
-			if _, err := validators.Podman(); err != nil {
-				logger.Debug("❌ Podman validation failed", zap.Error(err))
-				validationErrors = append(validationErrors, fmt.Errorf("❌ podman validation failed: %w", err))
-			} else {
-				logger.Debug("✅ Podman validation passed")
+			if !skip[CheckPodman] {
+				if _, err := validators.Podman(); err != nil {
+					validationErrors = append(validationErrors, fmt.Errorf("❌ podman validation failed: %w", err))
+				} else {
+					logger.Info("✅ Podman validation passed")
+				}
 			}
 
 			// 6. IBM Power Version Validation
-			if err := validatePowerVersion(); err != nil {
-				validationErrors = append(validationErrors, err)
+			if !skip[CheckPower11] {
+				if err := validatePowerVersion(); err != nil {
+					validationErrors = append(validationErrors, err)
+				}
 			}
 
 			// 7. RHAIIS Licence Validation
-			if err := validateRHAIISLicense(); err != nil {
-				validationErrors = append(validationErrors, err)
+			if !skip[CheckRHAIIS] {
+				if err := validateRHAIISLicense(); err != nil {
+					validationErrors = append(validationErrors, err)
+				}
+			}
+
+			// 8. Check if Spyre is attached to the system
+			if !skip["spyre"] {
+				if err := validateSpyreAttachment(); err != nil {
+					validationErrors = append(validationErrors, err)
+				}
 			}
 
 			if len(validationErrors) > 0 {
@@ -129,20 +194,37 @@ All checks must pass for successful bootstrap configuration.`,
 				return fmt.Errorf("%d validation check(s) failed", len(validationErrors))
 			}
 
-			// TODO: add --skip-validation flag
-			// TODO: add --verbose flag
-
 			logger.Info("✅ All validations passed")
 			return nil
 		},
 	}
+
+	cmd.Flags().StringSliceVar(&skipChecks, "skip-validation", []string{},
+		"Skip specific validation checks (comma-separated: root,rhel,rhn,ltc,podman,power11,rhaiis)")
+	cmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output for debugging")
+
+	return cmd
+}
+
+func parseSkipChecks(skipChecks []string) map[string]bool {
+	skipMap := make(map[string]bool)
+	for _, check := range skipChecks {
+		parts := strings.Split(check, ",")
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(strings.ToLower(part))
+			if trimmed != "" {
+				skipMap[trimmed] = true
+			}
+		}
+	}
+	return skipMap
 }
 
 func rootCheck() error {
 	euid := os.Geteuid()
 
 	if euid == 0 {
-		logger.Debug("✅ Current user is root.")
+		logger.Info("✅ Current user is root.")
 	} else {
 		logger.Error("❌ Current user is not root.")
 		logger.Debug("Effective User ID", zap.Int("euid", euid))
@@ -192,19 +274,34 @@ func validateOS() error {
 		return fmt.Errorf("❌ unsupported RHEL version: %s. Minimum required version is 9.6", version)
 	}
 
-	logger.Debug("✅ Operating system is RHEL", zap.String("version", version))
+	logger.Info("✅ Operating system is RHEL", zap.String("version", version))
 	return nil
 }
 
 // validateRHNRegistration checks if the system is registered with RHN
 func validateRHNRegistration() error {
 	logger.Debug("Validating RHN registration...")
+	cmd := exec.Command("dnf", "repolist")
+	output, err := cmd.CombinedOutput()
+
+	// Checking the output content first, as dnf may return non-zero exit code
+	// even when the system is registered
+	outputStr := string(output)
+	if strings.Contains(outputStr, "This system is not registered") {
+		return fmt.Errorf("❌ system is not registered with RHN")
+	}
+
+	if err != nil {
+		return fmt.Errorf("❌ failed to check registration status: %w", err)
+	}
+
+	logger.Info("✅ System is registered with RHN")
 	return nil
 }
 
-// validateLTCRPMRepo checks if the LTC RPM repository is configured
-func validateLTCRPMRepo() error {
-	logger.Debug("Validating LTC RPM repository...")
+// validateServiceReport checks if the service-report package is configured
+func validateServiceReport() error {
+	logger.Debug("Validating if service-report package is configured...")
 	return nil
 }
 
@@ -217,16 +314,31 @@ func validatePowerVersion() error {
 	}
 
 	data, err := os.ReadFile("/proc/cpuinfo")
-	if err == nil && strings.Contains(string(data), "POWER11") {
-		logger.Debug("✅ System is running on IBM POWER11 architecture")
+	if err == nil && strings.Contains(strings.ToLower(string(data)), "power11") {
+		logger.Info("✅ System is running on IBM Power11 architecture")
 		return nil
 	}
 
-	return fmt.Errorf("❌ unsupported IBM Power version: POWER11 is required")
+	return fmt.Errorf("❌ unsupported IBM Power version: Power11 is required")
 }
 
 // validateRHAIISLicense checks if a valid RHAIIS license is present
 func validateRHAIISLicense() error {
 	logger.Debug("Validating RHAIIS license...")
+	return nil
+}
+
+func validateSpyreAttachment() error {
+	logger.Debug("Validating Spyre attachment...")
+	out, err := exec.Command("lspci").Output()
+	if err != nil {
+		return fmt.Errorf("❌ failed to execute lspci command: %w", err)
+	}
+
+	if !strings.Contains(string(out), "IBM Spyre Accelerator") {
+		return fmt.Errorf("❌ IBM Spyre Accelerator is not attached to the LPAR")
+	}
+
+	logger.Info("✅ IBM Spyre Accelerator is attached to the LPAR")
 	return nil
 }
