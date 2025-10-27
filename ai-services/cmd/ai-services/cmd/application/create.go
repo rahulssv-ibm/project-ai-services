@@ -4,7 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"slices"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -12,7 +13,12 @@ import (
 	"github.com/project-ai-services/ai-services/internal/pkg/runtime/podman"
 )
 
+const (
+	applicationTemplatesPath = "applications/"
+)
+
 var templateName string
+var readinessTimeout = 5 * time.Minute
 
 var createCmd = &cobra.Command{
 	Use:   "create [name]",
@@ -38,11 +44,15 @@ var createCmd = &cobra.Command{
 			return fmt.Errorf("failed to list templates: %w", err)
 		}
 
-		if !slices.Contains(appTemplateNames, templateName) {
+		var appTemplateName string
+
+		if index := fetchAppTemplateIndex(appTemplateNames, templateName); index == -1 {
 			return errors.New("provided template name is wrong. Please provide a valid template name")
+		} else {
+			appTemplateName = appTemplateNames[index]
 		}
 
-		tmpls, err := helpers.LoadAllTemplates()
+		tmpls, err := helpers.LoadAllTemplates(applicationTemplatesPath + appTemplateName)
 		if err != nil {
 			return fmt.Errorf("failed to parse the templates: %w", err)
 		}
@@ -70,15 +80,26 @@ var createCmd = &cobra.Command{
 			// Wrap the bytes in a bytes.Reader
 			reader := bytes.NewReader(rendered.Bytes())
 
-			if err := runtime.CreatePod(reader); err != nil {
+			kubeReport, err := runtime.CreatePod(reader)
+			if err != nil {
 				return fmt.Errorf("failed pod creation: %w", err)
 			}
 
 			cmd.Printf("Successfully ran podman kube play for %s\n", name)
+
+			for _, pod := range kubeReport.Pods {
+				cmd.Printf("Performing Pod Readiness check...: %s\n", pod.ID)
+				for _, containerID := range pod.Containers {
+					cmd.Printf("Doing Container Readiness check...: %s\n", containerID)
+					if err := helpers.WaitForContainerReadiness(runtime, containerID, readinessTimeout); err != nil {
+						return fmt.Errorf("readiness check failed!: %w", err)
+					}
+					cmd.Printf("Container: %s is ready\n", containerID)
+				}
+			}
+
 			cmd.Println("-------")
 		}
-
-		// TODO: Wait until all the pods are in Running/ Ready state
 
 		return nil
 	},
@@ -87,4 +108,18 @@ var createCmd = &cobra.Command{
 func init() {
 	createCmd.Flags().StringVarP(&templateName, "template-name", "t", "", "Template name to use (required)")
 	createCmd.MarkFlagRequired("template-name")
+}
+
+// fetchAppTemplateIndex -> Returns the index of app template if exists, otherwise -1
+func fetchAppTemplateIndex(appTemplateNames []string, templateName string) int {
+	appTemplateIndex := -1
+
+	for index, appTemplateName := range appTemplateNames {
+		if strings.EqualFold(appTemplateName, templateName) {
+			appTemplateIndex = index
+			break
+		}
+	}
+
+	return appTemplateIndex
 }

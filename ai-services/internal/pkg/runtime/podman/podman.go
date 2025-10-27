@@ -3,15 +3,19 @@ package podman
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"os"
 
+	"github.com/containers/podman/v5/libpod/define"
 	"github.com/containers/podman/v5/pkg/bindings"
+	"github.com/containers/podman/v5/pkg/bindings/containers"
 	"github.com/containers/podman/v5/pkg/bindings/images"
 	"github.com/containers/podman/v5/pkg/bindings/kube"
 	"github.com/containers/podman/v5/pkg/bindings/pods"
+	"github.com/containers/podman/v5/pkg/domain/entities/types"
 )
 
 type PodmanClient struct {
@@ -86,13 +90,13 @@ func (pc *PodmanClient) CreatePodFromTemplate(filePath string, params map[string
 	return nil
 }
 
-func (pc *PodmanClient) CreatePod(body io.Reader) error {
-	_, err := kube.PlayWithBody(pc.Context, body, nil)
+func (pc *PodmanClient) CreatePod(body io.Reader) (*types.KubePlayReport, error) {
+	kubeReport, err := kube.PlayWithBody(pc.Context, body, nil)
 	if err != nil {
-		return fmt.Errorf("failed to execute podman kube play: %w", err)
+		return kubeReport, fmt.Errorf("failed to execute podman kube play: %w", err)
 	}
 
-	return nil
+	return kubeReport, nil
 }
 
 func (pc *PodmanClient) DeletePod(id string, force *bool) error {
@@ -102,4 +106,32 @@ func (pc *PodmanClient) DeletePod(id string, force *bool) error {
 	}
 
 	return nil
+}
+
+func (pc *PodmanClient) InspectContainer(nameOrId string) (*define.InspectContainerData, error) {
+	stats, err := containers.Inspect(pc.Context, nameOrId, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect container: %w", err)
+	}
+
+	if stats == nil {
+		return nil, errors.New("got nil stats when doing container inspect")
+	}
+
+	return stats, nil
+}
+
+func (pc *PodmanClient) ListContainers(filters map[string][]string) (any, error) {
+	var listOpts containers.ListOptions
+
+	if len(filters) >= 1 {
+		listOpts.Filters = filters
+	}
+
+	containerlist, err := containers.List(pc.Context, &listOpts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+
+	return containerlist, nil
 }

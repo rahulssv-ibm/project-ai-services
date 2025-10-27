@@ -6,8 +6,11 @@ import (
 	"slices"
 	"strings"
 	"text/template"
+	"time"
 
+	"github.com/containers/podman/v5/libpod/define"
 	"github.com/project-ai-services/ai-services/assets"
+	"github.com/project-ai-services/ai-services/internal/pkg/runtime"
 )
 
 func FetchApplicationTemplatesNames() ([]string, error) {
@@ -40,10 +43,11 @@ func FetchApplicationTemplatesNames() ([]string, error) {
 	return apps, nil
 }
 
-func LoadAllTemplates() (map[string]*template.Template, error) {
+// LoadAllTemplates -> Loads all templates under a specified root path
+func LoadAllTemplates(rootPath string) (map[string]*template.Template, error) {
 	tmpls := make(map[string]*template.Template)
 
-	err := fs.WalkDir(assets.ApplicationFS, "applications", func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(assets.ApplicationFS, rootPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -59,4 +63,45 @@ func LoadAllTemplates() (map[string]*template.Template, error) {
 		return nil
 	})
 	return tmpls, err
+}
+
+type HealthStatus string
+
+const (
+	Ready    HealthStatus = "healthy"
+	Starting HealthStatus = "starting"
+	NotReady HealthStatus = "unhealthy"
+)
+
+func WaitForContainerReadiness(runtime runtime.Runtime, containerNameOrId string, timeout time.Duration) error {
+	var containerStatus *define.InspectContainerData
+	var err error
+
+	deadline := time.Now().Add(timeout)
+
+	for {
+		// fetch the container status
+		containerStatus, err = runtime.InspectContainer(containerNameOrId)
+		if err != nil {
+			return fmt.Errorf("failed to check container status: %w", err)
+		}
+
+		healthStatus := containerStatus.State.Health
+
+		if healthStatus == nil {
+			return nil
+		}
+
+		if healthStatus.Status == string(Ready) {
+			return nil
+		}
+
+		// if deadline exeeds, stop the readiness check
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for readiness")
+		}
+
+		// every 2 seconds inspect the container
+		time.Sleep(2 * time.Second)
+	}
 }
