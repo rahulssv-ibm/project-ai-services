@@ -19,4 +19,5 @@ func init() {
 	ApplicationCmd.AddCommand(psCmd)
 	ApplicationCmd.AddCommand(deleteCmd)
 	ApplicationCmd.AddCommand(image.ImageCmd)
+	ApplicationCmd.AddCommand(stopCmd)
 }

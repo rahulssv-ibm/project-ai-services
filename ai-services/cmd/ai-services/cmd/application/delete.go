@@ -1,9 +1,7 @@
 package application
 
 import (
-	"bufio"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/containers/podman/v5/pkg/domain/entities/types"
@@ -57,22 +55,14 @@ var deleteCmd = &cobra.Command{
 
 		cmd.Printf("Are you sure you want to delete above pods? (y/N): ")
 
-		response, err := readUserDeletePrompt()
+		confirmDelete, err := utils.ConfirmAction()
 		if err != nil {
 			return fmt.Errorf("failed to take user input: %w", err)
 		}
 
-		response = strings.TrimSpace(strings.ToLower(response))
-
-		// If response is 'n' or 'no' -> do not proceed with deletion
-		if response == "n" || response == "no" {
+		if !confirmDelete {
 			cmd.Printf("Skipping the deletion of pods")
 			return nil
-		}
-
-		// if response is neither 'y' and 'yes' -> then its an invalid input
-		if response != "y" && response != "yes" {
-			return fmt.Errorf("received invalid input: %s. Please respond with 'y' or 'n'", response)
 		}
 
 		cmd.Printf("Proceeding with deletion...\n")
@@ -95,14 +85,4 @@ var deleteCmd = &cobra.Command{
 
 		return nil
 	},
-}
-
-func readUserDeletePrompt() (string, error) {
-	reader := bufio.NewReader(os.Stdin)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-
-	return response, nil
 }

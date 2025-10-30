@@ -146,3 +146,12 @@ func (pc *PodmanClient) ListContainers(filters map[string][]string) (any, error)
 
 	return containerlist, nil
 }
+
+func (pc *PodmanClient) StopPod(id string) error {
+	_, err := pods.Stop(pc.Context, id, &pods.StopOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to stop the pod: %w", err)
+	}
+
+	return nil
+}
