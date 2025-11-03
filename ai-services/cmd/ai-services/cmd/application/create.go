@@ -98,14 +98,11 @@ var createCmd = &cobra.Command{
 		}
 
 		// calculate the actual available spyre cards
-
-		// TODO: calculate actual spyre cards count available (Assume it returns list of PCI Addresses)
-		// For now using the below dummy values to proceed
-		actualSpyreCardsCount := reqSpyreCardsCount
-		pciAddresses := []string{}
-		for i := range actualSpyreCardsCount {
-			pciAddresses = append(pciAddresses, fmt.Sprintf("%d", i+1))
+		pciAddresses, err := helpers.FindFreeSpyreCards()
+		if err != nil {
+			return fmt.Errorf("failed to find free Spyre Cards: %w", err)
 		}
+		actualSpyreCardsCount := len(pciAddresses)
 
 		// validate spyre card requirements
 		if err := validateSpyreCardRequirements(reqSpyreCardsCount, actualSpyreCardsCount); err != nil {
